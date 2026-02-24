@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 const stageThresholds = [40, 60, 80];
-const STAGE_TIME = 600; // seconds for demo
+const STAGE_TIME = 6; // seconds for demo
 
 function QuizPage() {
   const navigate = useNavigate();
@@ -18,29 +18,60 @@ function QuizPage() {
   const [nextRoute, setNextRoute] = useState(null);
   const [updatedStudent, setUpdatedStudent] = useState(null);
 
-  if (!student || !quiz) return null;
+  const safeParse = (key, fallback) => {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
 
-  const quizKey = `${quiz.class}-${quiz.subject}-${quiz.id}`;
-  const stage = quiz.stages[stageIndex];
-  const question = stage.questions[questionIndex];
+  // ✅ basic guards
+  const safeQuiz = quiz && Array.isArray(quiz.stages) ? quiz : null;
+  const safeStudent = student || null;
+
+  const quizKey = useMemo(() => {
+    if (!safeQuiz) return "";
+    return `${safeQuiz.class}-${safeQuiz.subject}-${safeQuiz.id}`;
+  }, [safeQuiz]);
+
+  const stage = useMemo(() => {
+    if (!safeQuiz) return null;
+    return safeQuiz.stages?.[stageIndex] || null;
+  }, [safeQuiz, stageIndex]);
+
+  const questions =
+    stage?.questions && Array.isArray(stage.questions) ? stage.questions : [];
+  const question = questions[questionIndex];
+
+  // If missing required data, bounce back safely
+  useEffect(() => {
+    if (!safeStudent || !safeQuiz) {
+      navigate("/student-dashboard");
+    }
+  }, [safeStudent, safeQuiz, navigate]);
 
   /* ⏱ TIMER */
   useEffect(() => {
-    if (submitting || nextRoute) return;
+    if (!stage || submitting || nextRoute) return;
+    if (timeLeft <= 0) return;
 
     const timer = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          clearInterval(timer);
-          handleSubmitStage();
-          return 0;
-        }
-        return t - 1;
-      });
+      setTimeLeft((t) => t - 1);
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [stageIndex, submitting, nextRoute]);
+  }, [stage, submitting, nextRoute, timeLeft]);
+
+  // ✅ When timer reaches 0, submit once
+  useEffect(() => {
+    if (!stage || submitting || nextRoute) return;
+    if (timeLeft === 0) {
+      handleSubmitStage();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeLeft, stage, submitting, nextRoute]);
 
   const handleAnswerSelect = (opt) => {
     const copy = [...answers];
@@ -48,38 +79,53 @@ function QuizPage() {
     setAnswers(copy);
   };
 
-  /* ✅ FIXED SUBMISSION LOGIC */
+  /* ✅ SUBMISSION LOGIC (FAIL = PERMANENT LOCK) */
   const handleSubmitStage = () => {
     if (submitting) return;
+    if (!stage || !questions.length) return;
+
     setSubmitting(true);
 
-    const correct = stage.questions.filter(
-      (q, i) => answers[i] === q.answer,
-    ).length;
+    const students = safeParse("students", []);
 
-    const score = (correct / stage.questions.length) * 100;
-    const passed = score >= stageThresholds[stageIndex];
-
-    const students = JSON.parse(localStorage.getItem("students") || "[]");
+    // find student (name + class + school if available)
     const idx = students.findIndex(
-      (s) => s.name === student.name && s.class === student.class,
+      (s) =>
+        (s.name || "") === (safeStudent?.name || "") &&
+        (s.class || "") === (safeStudent?.class || "") &&
+        ((s.school || "") === (safeStudent?.school || "") ||
+          !safeStudent?.school),
     );
 
-    const currentStudent = { ...students[idx] };
+    const safeIdx = idx >= 0 ? idx : students.length - 1;
+    if (safeIdx < 0) {
+      navigate("/register-student");
+      return;
+    }
 
-    /* ✅ ENSURE SAFE STRUCTURE */
+    const currentStudent = { ...students[safeIdx] };
     currentStudent.quizStatus = currentStudent.quizStatus || {};
-    currentStudent.progress = currentStudent.progress || {};
 
-    currentStudent.progress[quizKey] = currentStudent.progress[quizKey] || [];
+    // ✅ If quiz already locked or completed, block retake permanently
+    const existingStatus = currentStudent.quizStatus[quizKey];
+    if (existingStatus?.locked || existingStatus?.completed) {
+      setUpdatedStudent(currentStudent);
+      setNextRoute("/student-dashboard");
+      return;
+    }
 
-    /* ✅ SAVE STAGE RESULT PER QUIZ */
-    currentStudent.progress[quizKey][stageIndex] = {
-      score,
-      passed,
-    };
+    const correct = questions.filter((q, i) => answers[i] === q.answer).length;
+    const score = (correct / questions.length) * 100;
+    const passed = score >= stageThresholds[stageIndex];
 
-    /* ❌ FAILED → LOCK ONLY THIS QUIZ */
+    // ✅ ensure progress is STAGE ARRAY (matches StudentProgress/AdminStudentProgress)
+    currentStudent.progress = Array.isArray(currentStudent.progress)
+      ? currentStudent.progress
+      : [];
+
+    currentStudent.progress[stageIndex] = { score, passed };
+
+    // ❌ FAILED → LOCK THIS QUIZ FOREVER
     if (!passed) {
       currentStudent.quizStatus[quizKey] = {
         locked: true,
@@ -87,7 +133,7 @@ function QuizPage() {
         completed: false,
       };
 
-      students[idx] = currentStudent;
+      students[safeIdx] = currentStudent;
       localStorage.setItem("students", JSON.stringify(students));
 
       setUpdatedStudent(currentStudent);
@@ -95,8 +141,17 @@ function QuizPage() {
       return;
     }
 
-    /* ▶ NEXT STAGE */
-    if (stageIndex < quiz.stages.length - 1) {
+    // ▶ NEXT STAGE (do NOT unlock anything—just keep status neutral)
+    if (stageIndex < safeQuiz.stages.length - 1) {
+      currentStudent.quizStatus[quizKey] = {
+        locked: false,
+        failedStage: null,
+        completed: false,
+      };
+
+      students[safeIdx] = currentStudent;
+      localStorage.setItem("students", JSON.stringify(students));
+
       setStageIndex((i) => i + 1);
       setQuestionIndex(0);
       setAnswers([]);
@@ -105,13 +160,14 @@ function QuizPage() {
       return;
     }
 
-    /* 🏆 PASSED ALL STAGES */
+    // 🏆 PASSED ALL STAGES → COMPLETED FOREVER
     currentStudent.quizStatus[quizKey] = {
       completed: true,
       locked: false,
+      failedStage: null,
     };
 
-    students[idx] = currentStudent;
+    students[safeIdx] = currentStudent;
     localStorage.setItem("students", JSON.stringify(students));
 
     setUpdatedStudent(currentStudent);
@@ -129,11 +185,14 @@ function QuizPage() {
     return () => clearTimeout(t);
   }, [nextRoute, updatedStudent, navigate]);
 
+  // If no question (bad data), show nothing
+  if (!safeStudent || !safeQuiz || !stage || !question) return null;
+
   /* 🎨 UI (UNCHANGED) */
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 flex flex-col items-center">
       <h1 className="text-3xl font-bold text-yellow-400 mb-2">
-        {quiz.subject} Quiz
+        {safeQuiz.subject} Quiz
       </h1>
 
       <p className="mb-2 text-white/70">Stage {stageIndex + 1}</p>
@@ -172,7 +231,7 @@ function QuizPage() {
           Previous
         </button>
 
-        {questionIndex < stage.questions.length - 1 ? (
+        {questionIndex < questions.length - 1 ? (
           <button
             onClick={() => setQuestionIndex((i) => i + 1)}
             disabled={!answers[questionIndex]}
@@ -187,9 +246,9 @@ function QuizPage() {
         ) : (
           <button
             onClick={handleSubmitStage}
-            disabled={answers.length < stage.questions.length}
+            disabled={answers.filter(Boolean).length < questions.length}
             className={`px-6 py-2 rounded font-semibold ${
-              answers.length < stage.questions.length
+              answers.filter(Boolean).length < questions.length
                 ? "bg-gray-600 cursor-not-allowed"
                 : "bg-green-400 text-black"
             }`}

@@ -13,6 +13,9 @@ import StudentProgress from "../screens/Pages/StudentProgress";
 import AdminStudentProgress from "../screens/Pages/AdminStudentProgress";
 import QuizPage from "../screens/Pages/QuizPage";
 
+// ✅ NEW: admin route guard
+import AdminProtectedRoute from "./AdminProtectedRoute";
+
 const MainRouter = createBrowserRouter([
   {
     element: <PublicLayout />,
@@ -31,7 +34,7 @@ const MainRouter = createBrowserRouter([
         element: <RegistrationPage />,
       },
       {
-        path: "/register-admin",
+        path: "/admin-register",
         element: <AdminRegister />,
       },
       {
@@ -47,29 +50,48 @@ const MainRouter = createBrowserRouter([
   {
     element: <Layout />,
     children: [
+      // ✅ PROTECT ADMIN ROUTES
       {
         path: "/admin-dashboard",
-        element: <AdminDashboard />,
+        element: (
+          <AdminProtectedRoute>
+            <AdminDashboard />
+          </AdminProtectedRoute>
+        ),
       },
+      {
+        path: "/create-quiz",
+        element: (
+          <AdminProtectedRoute>
+            <CreateQuiz />
+          </AdminProtectedRoute>
+        ),
+      },
+      {
+        path: "/manage-quiz",
+        element: (
+          <AdminProtectedRoute>
+            <ManageQuiz />
+          </AdminProtectedRoute>
+        ),
+      },
+      {
+        path: "/adminstudent-progress",
+        element: (
+          <AdminProtectedRoute>
+            <AdminStudentProgress />
+          </AdminProtectedRoute>
+        ),
+      },
+
+      // ✅ STUDENT ROUTES (unchanged)
       {
         path: "/student-dashboard",
         element: <StudentDashboard />,
       },
       {
-        path: "/create-quiz",
-        element: <CreateQuiz />,
-      },
-      {
-        path: "/manage-quiz",
-        element: <ManageQuiz />,
-      },
-      {
         path: "/student-progress",
         element: <StudentProgress />,
-      },
-      {
-        path: "/adminstudent-progress",
-        element: <AdminStudentProgress />,
       },
     ],
   },

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 function AdminDashboard() {
@@ -6,36 +6,54 @@ function AdminDashboard() {
   const [admin, setAdmin] = useState(null);
   const [students, setStudents] = useState([]);
   const [quizzes, setQuizzes] = useState([]);
+  const [progressRecords, setProgressRecords] = useState([]);
+
+  const safeParse = (key, fallback) => {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
 
   useEffect(() => {
     const loggedIn = localStorage.getItem("adminLoggedIn");
     if (!loggedIn) {
-      navigate("/admin-register");
+      navigate("/register-admin"); // ✅ fix route path
       return;
     }
 
-    const adminData = JSON.parse(localStorage.getItem("adminData") || "{}");
+    const adminData = safeParse("adminData", {});
     if (!adminData?.verified) {
       alert("Access denied. Admin verification required.");
-      navigate("/admin-register");
+      navigate("/register-admin"); // ✅ fix route path
       return;
     }
 
     setAdmin(adminData);
 
     // Load students linked to this admin
-    const allStudents = JSON.parse(localStorage.getItem("students") || "[]");
+    const allStudents = safeParse("students", []);
     const myStudents = allStudents.filter(
-      (s) => s.adminEmail === adminData.email
+      (s) => s.adminEmail === adminData.email,
     );
     setStudents(myStudents);
 
     // Load quizzes created by this admin
-    const allQuizzes = JSON.parse(localStorage.getItem("quizzes") || "[]");
+    const allQuizzes = safeParse("quizzes", []);
     const myQuizzes = allQuizzes.filter(
-      (q) => q.adminEmail === adminData.email
+      (q) => q.adminEmail === adminData.email,
     );
     setQuizzes(myQuizzes);
+
+    // ✅ Load progress records linked to this admin
+    // Expected structure: [{ adminEmail, studentKey, studentName, quizKey, score, total, percentage, createdAt }]
+    const allProgress = safeParse("studentProgress", []);
+    const myProgress = allProgress.filter(
+      (p) => p.adminEmail === adminData.email,
+    );
+    setProgressRecords(myProgress);
   }, [navigate]);
 
   const handleLogout = () => {
@@ -47,7 +65,7 @@ function AdminDashboard() {
     if (!window.confirm("Remove this student from your list?")) return;
 
     const studentToRemove = students[index];
-    const allStudents = JSON.parse(localStorage.getItem("students") || "[]");
+    const allStudents = safeParse("students", []);
 
     const updatedAllStudents = allStudents.filter(
       (s) =>
@@ -56,11 +74,72 @@ function AdminDashboard() {
           s.school === studentToRemove.school &&
           s.class === studentToRemove.class &&
           s.adminEmail === admin.email
-        )
+        ),
     );
 
     localStorage.setItem("students", JSON.stringify(updatedAllStudents));
     setStudents(updatedAllStudents.filter((s) => s.adminEmail === admin.email));
+  };
+
+  // ✅ Helper: create a stable key for each student (prefer email/phone/id if you have it)
+  const makeStudentKey = (s) =>
+    `${(s.name || "").trim().toLowerCase()}|${(s.school || "")
+      .trim()
+      .toLowerCase()}|${(s.class || "").trim().toLowerCase()}|${(
+      s.adminEmail || ""
+    )
+      .trim()
+      .toLowerCase()}`;
+
+  // ✅ Build summary per student from progressRecords
+  const progressByStudentKey = useMemo(() => {
+    const map = new Map();
+    for (const rec of progressRecords) {
+      const key = rec.studentKey;
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(rec);
+    }
+    return map;
+  }, [progressRecords]);
+
+  const getStudentSummary = (student) => {
+    const key = makeStudentKey(student);
+    const list = progressByStudentKey.get(key) || [];
+
+    const attempts = list.length;
+    const best = list.reduce(
+      (max, r) => Math.max(max, Number(r.percentage || 0)),
+      0,
+    );
+    const last = list
+      .slice()
+      .sort(
+        (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0),
+      )[0];
+
+    return {
+      key,
+      attempts,
+      best,
+      lastPlayed: last?.createdAt
+        ? new Date(last.createdAt).toLocaleString()
+        : null,
+    };
+  };
+
+  const handleViewStudent = (student) => {
+    // Save selected student so your /adminstudent-progress page can read it
+    const summary = getStudentSummary(student);
+    localStorage.setItem(
+      "selectedAdminStudent",
+      JSON.stringify({
+        ...student,
+        studentKey: summary.key,
+      }),
+    );
+
+    navigate("/adminstudent-progress");
   };
 
   if (!admin) return null;
@@ -145,25 +224,52 @@ function AdminDashboard() {
                   </td>
                 </tr>
               ) : (
-                students.map((s, idx) => (
-                  <tr
-                    key={idx}
-                    className="border-b border-gray-700 hover:bg-gray-700 transition"
-                  >
-                    <td className="px-4 py-2">{s.name}</td>
-                    <td className="px-4 py-2">{s.school}</td>
-                    <td className="px-4 py-2">{s.class}</td>
-                    <td className="px-4 py-2">{s.status || "Not started"}</td>
-                    <td className="px-4 py-2">
-                      <button
-                        onClick={() => handleRemoveStudent(idx)}
-                        className="px-3 py-1 bg-red-500 hover:bg-red-400 rounded text-white transition"
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                students.map((s, idx) => {
+                  const summary = getStudentSummary(s);
+
+                  return (
+                    <tr
+                      key={idx}
+                      className="border-b border-gray-700 hover:bg-gray-700 transition"
+                    >
+                      <td className="px-4 py-2">{s.name}</td>
+                      <td className="px-4 py-2">{s.school}</td>
+                      <td className="px-4 py-2">{s.class}</td>
+
+                      {/* ✅ Status shows progress summary (still same table styling) */}
+                      <td className="px-4 py-2">
+                        {summary.attempts > 0 ? (
+                          <span className="text-green-300">
+                            Attempts: {summary.attempts} · Best: {summary.best}%
+                            {summary.lastPlayed ? (
+                              <span className="text-white/60">
+                                {" "}
+                                · Last: {summary.lastPlayed}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          s.status || "Not started"
+                        )}
+                      </td>
+
+                      <td className="px-4 py-2 flex gap-2">
+                        <button
+                          onClick={() => handleViewStudent(s)}
+                          className="px-3 py-1 bg-yellow-500 hover:bg-yellow-400 rounded text-black transition"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => handleRemoveStudent(idx)}
+                          className="px-3 py-1 bg-red-500 hover:bg-red-400 rounded text-white transition"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

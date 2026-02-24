@@ -1,20 +1,98 @@
 import { useState, useEffect } from "react";
-import { FaExclamationTriangle, FaTimes } from "react-icons/fa";
+import { FaExclamationTriangle, FaTimes, FaTrash } from "react-icons/fa";
+import { useNavigate } from "react-router-dom";
 
 function AdminStudentProgress() {
+  const navigate = useNavigate();
+
   const [students, setStudents] = useState([]);
   const [visibleStudents, setVisibleStudents] = useState([]);
 
   const stageThresholds = [40, 60, 80]; // cutoff marks
 
-  useEffect(() => {
-    const storedStudents = JSON.parse(localStorage.getItem("students") || "[]");
-    setStudents(storedStudents);
-    setVisibleStudents(storedStudents);
-  }, []);
+  const safeParse = (key, fallback) => {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
 
+  useEffect(() => {
+    // ✅ Admin gate (matches your existing auth logic)
+    const loggedIn = localStorage.getItem("adminLoggedIn");
+    if (loggedIn !== "true") {
+      navigate("/register-admin");
+      return;
+    }
+
+    const adminData = safeParse("adminData", null);
+    if (!adminData?.verified) {
+      navigate("/register-admin");
+      return;
+    }
+
+    // ✅ Only load students linked to this admin
+    const storedStudents = safeParse("students", []);
+    const myStudents = storedStudents.filter(
+      (s) =>
+        (s.adminEmail || "").toLowerCase() ===
+        (adminData.email || "").toLowerCase(),
+    );
+
+    setStudents(myStudents);
+    setVisibleStudents(myStudents);
+  }, [navigate]);
+
+  // ✅ Hide from view only (temporary)
   const clearStudentFromView = (index) => {
     setVisibleStudents((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ✅ Permanently remove (eliminate) student from localStorage
+  const eliminateStudent = (student) => {
+    if (!window.confirm(`Eliminate ${student.name} permanently?`)) return;
+
+    const allStudents = safeParse("students", []);
+
+    // Remove by matching key fields you already store
+    const updatedAllStudents = allStudents.filter(
+      (s) =>
+        !(
+          (s.name || "") === (student.name || "") &&
+          (s.school || "") === (student.school || "") &&
+          (s.class || "") === (student.class || "") &&
+          (s.adminEmail || "") === (student.adminEmail || "")
+        ),
+    );
+
+    localStorage.setItem("students", JSON.stringify(updatedAllStudents));
+
+    // Update local page states (remove from both lists)
+    setStudents((prev) =>
+      prev.filter(
+        (s) =>
+          !(
+            (s.name || "") === (student.name || "") &&
+            (s.school || "") === (student.school || "") &&
+            (s.class || "") === (student.class || "") &&
+            (s.adminEmail || "") === (student.adminEmail || "")
+          ),
+      ),
+    );
+
+    setVisibleStudents((prev) =>
+      prev.filter(
+        (s) =>
+          !(
+            (s.name || "") === (student.name || "") &&
+            (s.school || "") === (student.school || "") &&
+            (s.class || "") === (student.class || "") &&
+            (s.adminEmail || "") === (student.adminEmail || "")
+          ),
+      ),
+    );
   };
 
   const getStageStatus = (student, stageIndex) => {
@@ -81,7 +159,7 @@ function AdminStudentProgress() {
                     .map((_, stageIdx) => {
                       const { score, passed, locked } = getStageStatus(
                         s,
-                        stageIdx
+                        stageIdx,
                       );
 
                       return (
@@ -91,15 +169,15 @@ function AdminStudentProgress() {
                             locked
                               ? "text-white/70"
                               : passed
-                              ? "text-green-400"
-                              : "text-red-500"
+                                ? "text-green-400"
+                                : "text-red-500"
                           }`}
                         >
                           {locked
                             ? "Locked"
                             : score !== null
-                            ? `${score.toFixed(2)}%`
-                            : "-"}
+                              ? `${score.toFixed(2)}%`
+                              : "-"}
                           {!locked && score !== null && !passed && (
                             <FaExclamationTriangle className="inline ml-1 text-yellow-400" />
                           )}
@@ -107,15 +185,25 @@ function AdminStudentProgress() {
                       );
                     })}
 
-                  {/* ✅ CLEAR BUTTON */}
+                  {/* ✅ CLEAR + ELIMINATE (same styling) */}
                   <td className="px-4 py-2 text-center">
-                    <button
-                      onClick={() => clearStudentFromView(idx)}
-                      className="text-red-400 hover:text-red-600"
-                      title="Clear student from view"
-                    >
-                      <FaTimes />
-                    </button>
+                    <div className="flex items-center justify-center gap-3">
+                      <button
+                        onClick={() => clearStudentFromView(idx)}
+                        className="text-red-400 hover:text-red-600"
+                        title="Clear student from view"
+                      >
+                        <FaTimes />
+                      </button>
+
+                      <button
+                        onClick={() => eliminateStudent(s)}
+                        className="text-red-400 hover:text-red-600"
+                        title="Eliminate student (remove permanently)"
+                      >
+                        <FaTrash />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
